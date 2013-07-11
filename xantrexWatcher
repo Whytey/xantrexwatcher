@@ -1,0 +1,80 @@
+#!/usr/bin/env python
+# Monitor the status of the solar inverter and
+# send it to zabbix.
+#
+# The is no error checking in this script!
+
+# Commands we use.  They are sent across the serial line, in the format "<command>?\r".
+commands = {'TIME':'power.time', 'KWHTODAY':'power.today', 'POUT':'power.out', 'PIN':'power.in', 'KWHLIFE':'power.life'}
+# Other commands we know of:
+# MEASTEMP: The temperature of the inverter, in the format C:0.0 F:32.0
+
+# how often to poll the Inverter and report the status in seconds.
+poll_interval = 120
+
+# The host running the zabbix-server.
+zabbix_server = '192.168.0.100'
+
+# The name of the Zabbix host being monitored.
+zabbix_host = 'inverter1'
+
+# The serial connection we are using.
+serial_port = '/dev/ttyS0'
+
+# The serial baud rate.
+serial_baud = 9600
+
+import logging
+import logging.handlers
+import os
+import serial
+import subprocess
+import time
+
+# Setup the logger
+logger = logging.getLogger('xantrexWatcher')
+logger.setLevel(logging.DEBUG)
+
+logfile = "xantrexWatcher.log"
+# Determine the logger location
+if not os.path.exists(os.path.join(os.getcwd(), 'setup.py')):
+    # We are in production.
+    logfile = os.path.join("var", "log", logfile)
+
+# Add the log message handler to the logger
+file_handler = logging.handlers.RotatingFileHandler(
+               logfile, maxBytes=10240, backupCount=7)
+file_handler.setLevel(logging.DEBUG)
+
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+
+while True:
+  # Open the serial port
+  logger.info("Opening the serial connection on port %s" % serial_port)
+  conn = serial.Serial(serial_port, serial_baud, timeout=10)
+  
+  try:
+    # Iterate through each of the commands
+    for command, zabbix_key in commands.items():
+      logger.debug("Writing command %s" % command)
+      conn.write("%s?\r" % command)
+      logger.debug("Finished writing, now reading")
+      value = float(conn.read(255))
+      logger.debug('%s: %s' % (zabbix_key, str(value)))
+
+      # Report status back.
+      logger.debug("Calling zabbix_sender with value of %s for key %s" % (str(value), zabbix_key))
+      subprocess.call(['zabbix_sender', '-z', zabbix_server, '-s', zabbix_host, '-k', zabbix_key, '-o', str(value)])
+  finally:
+    # Close the serial connection until next time.
+    logger.info("Closing the serial connection")
+    conn.close()
+
+  # Sleep until next time.
+  logger.info("Sleeping")
+  time.sleep(poll_interval)
+  logger.debug("Woke from sleep")
+
