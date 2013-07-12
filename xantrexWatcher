@@ -8,9 +8,17 @@
 commands = {'TIME':'power.time', 'KWHTODAY':'power.today', 'POUT':'power.out', 'PIN':'power.in', 'KWHLIFE':'power.life'}
 # Other commands we know of:
 # MEASTEMP: The temperature of the inverter, in the format C:0.0 F:32.0
+# IDN
+# ROM
+# VIN
+# IIN
+# VOUT
+# IOUT
+# MEASTEMP
+# RECTIME
 
 # how often to poll the Inverter and report the status in seconds.
-poll_interval = 120
+poll_interval = 5
 
 # The host running the zabbix-server.
 zabbix_server = '192.168.0.100'
@@ -54,7 +62,7 @@ logger.addHandler(file_handler)
 while True:
   # Open the serial port
   logger.info("Opening the serial connection on port %s" % serial_port)
-  conn = serial.Serial(serial_port, serial_baud, timeout=10)
+  conn = serial.Serial(serial_port, serial_baud, timeout=1)
   
   try:
     # Iterate through each of the commands
