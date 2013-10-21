@@ -2,87 +2,291 @@
 # Monitor the status of the solar inverter and
 # send it to zabbix.
 #
-# The is no error checking in this script!
+# There is very little error checking in this script!
 
-# Commands we use.  They are sent across the serial line, in the format "<command>?\r".
-commands = {'TIME':'power.time', 'KWHTODAY':'power.today', 'POUT':'power.out', 'PIN':'power.in', 'KWHLIFE':'power.life'}
-# Other commands we know of:
-# MEASTEMP: The temperature of the inverter, in the format C:0.0 F:32.0
-# IDN
-# ROM
-# VIN
-# IIN
-# VOUT
-# IOUT
-# MEASTEMP
-# RECTIME
-
-# how often to poll the Inverter and report the status in seconds.
-poll_interval = 5
-
-# The host running the zabbix-server.
-zabbix_server = '192.168.0.100'
-
-# The name of the Zabbix host being monitored.
-zabbix_host = 'inverter1'
-
-# The serial connection we are using.
-serial_port = '/dev/ttyS0'
-
-# The serial baud rate.
-serial_baud = 9600
-
+from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+from datetime import timedelta
 import logging
 import logging.handlers
 import os
 import serial
 import subprocess
+import threading
 import time
 
-# Setup the logger
-logger = logging.getLogger('xantrexWatcher')
-logger.setLevel(logging.DEBUG)
 
-logfile = "xantrexWatcher.log"
-# Determine the logger location
-if not os.path.exists(os.path.join(os.getcwd(), 'setup.py')):
-    # We are in production.
-    logfile = os.path.join("var", "log", logfile)
+class HTTPHandlerFactory():
+    def __init__(self):
+        self.__logger = logging.getLogger("xantrexWatcher.HTTPHandlerFactory")
+        self.__logger.info("Initialised...")
+        self.__xantrexData = {}
+        self.__machineStateData = {}
+        
+    def handleXantrexData(self, data):
+        self.__logger.debug("Got new Xantrex data: %s" % str(data))
+        self.__xantrexData = data
+        
+    def handleMachineState(self, data):
+        self.__logger.debug("Got new machine state: %s" % str(data))
+        self.__machineStateData = data
+        
+    def __call__(self, request, client_address, server):
+        "Act as a factory for the server objects."
+        self.__logger.debug("Creating a handler")
+        handler = HTTPHandler(request, client_address, server, self.__xantrexData, self.__machineStateData)
+        return handler
 
-# Add the log message handler to the logger
-file_handler = logging.handlers.RotatingFileHandler(
-               logfile, maxBytes=10240, backupCount=7)
-file_handler.setLevel(logging.DEBUG)
 
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
+class HTTPHandler(BaseHTTPRequestHandler):
+    def __init__(self, request, client_address, server, xantrexData, machineStateData):
+        self.__logger = logging.getLogger("xantrexWatcher.HTTPHandler")
+        self.__logger.debug("Initialised with data: %s & %s" % (str(xantrexData), str(machineStateData)))
+        self.__xantrexData = xantrexData
+        self.__machineStateData = machineStateData
+        BaseHTTPRequestHandler.__init__(self, request, client_address, server)
+        
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        threadName = threading.currentThread().getName()
+        message =  "%s\nXantrex Data: %s\nMachine Data: %s\n" % (threadName, self.__xantrexData, self.__machineStateData)
+        self.wfile.write(message)
+        self.wfile.write('\n')
+        return
+    
+    def log_message(self, format, *args):
+        self.__logger.info("Got a request: %s" % str(args))
+        return
 
-logger.addHandler(file_handler)
+    
+class ThreadedHTTPServer(threading.Thread):
+    # Which address we should bind to.
+    __server_address = '127.0.0.1'
+    
+    # Which port the server should bind to.
+    __server_port = 8080
+    
+    def __init__(self, handler):
+        threading.Thread.__init__(self)
+        self.__logger = logging.getLogger("xantrexWatcher.ThreadedHTTPServer")
+        self.__logger.info("Initialised...")
+        self.__handler = handler
+        self.__server = HTTPServer((self.__server_address, self.__server_port), self.__handler)
 
-while True:
-  # Open the serial port
-  logger.info("Opening the serial connection on port %s" % serial_port)
-  conn = serial.Serial(serial_port, serial_baud, timeout=1)
-  
-  try:
-    # Iterate through each of the commands
-    for command, zabbix_key in commands.items():
-      logger.debug("Writing command %s" % command)
-      conn.write("%s?\r" % command)
-      logger.debug("Finished writing, now reading")
-      value = float(conn.read(255))
-      logger.debug('%s: %s' % (zabbix_key, str(value)))
+    
+    def run(self):
+        self.__logger.info("Starting server")
+        self.__server.serve_forever()
 
-      # Report status back.
-      logger.debug("Calling zabbix_sender with value of %s for key %s" % (str(value), zabbix_key))
-      subprocess.call(['zabbix_sender', '-z', zabbix_server, '-s', zabbix_host, '-k', zabbix_key, '-o', str(value)])
-  finally:
-    # Close the serial connection until next time.
-    logger.info("Closing the serial connection")
-    conn.close()
 
-  # Sleep until next time.
-  logger.info("Sleeping")
-  time.sleep(poll_interval)
-  logger.debug("Woke from sleep")
+class PVOutputSender():
+    
+    def __init__(self):
+        self.__logger = logging.getLogger("xantrexWatcher.PVOutputSender")
+        self.__logger.info("Initialised...")
+    
+    def handleXantrexData(self, data):
+        pass
 
+
+class ZabbixSender():
+    # The host running the zabbix-server.
+    zabbix_server = '192.168.0.100'
+    
+    # The name of the Zabbix host being monitored.
+    zabbix_host = 'inverter1'
+
+    def __init__(self):
+        self.__logger = logging.getLogger("xantrexWatcher.ZabbixSender")
+        self.__logger.info("Initialised...")
+
+    def handleXantrexData(self, data):
+        for key, value in data.items():
+            # Report status back.
+            self.__logger.debug("Calling zabbix_sender with value of %s for key %s" % (str(value), key))
+            subprocess.call(['zabbix_sender', '-z', self.zabbix_server, '-s', self.zabbix_host, '-k', key, '-o', str(value)])
+
+
+class MachineStatePoller(threading.Thread):
+    # How often the poller runs, in seconds
+    __poll_interval = 30
+    
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.__logger = logging.getLogger("xantrexWatcher.MachineStatePoller")
+        self.__logger.info("Initialised...")
+        self.__listeners = []
+
+    def add_listener(self, listener):
+        self.__listeners.append(listener)
+        
+    def __get_time(self, data):
+        data["time"] = str(time.time())
+        
+    def __get_uptime(self, data):
+        with open('/proc/uptime', 'r') as f:
+            uptime_seconds = float(f.readline().split()[0])
+            uptime_string = str(timedelta(seconds = uptime_seconds))
+            data["uptime"] = uptime_string
+        
+    def __get_load_averages(self, data):
+        load1, load5, load15 = os.getloadavg()
+        data["load1"] = load1
+        data["load5"] = load5
+        data["load15"] = load15
+        
+    def __get_disk_space(self, data):
+        pass
+    
+    def __get_cpu_use(self, data):
+        pass
+    
+    def run(self):
+        self.__logger.info("Starting poller")
+        while True:
+            self.__logger.info("Polling...")
+            data = {}
+            
+            # Get the data
+            self.__get_time(data)
+            self.__get_uptime(data)
+            self.__get_load_averages(data)
+            self.__get_disk_space(data)
+            self.__get_cpu_use(data)
+            # Report the values to our listeners
+            for listener in self.__listeners:
+                try:
+                    listener.handleMachineState(data)
+                except:
+                    self.__logger.exception("Unable to send data %s to the listener %s" % (data, listener))
+            self.__logger.debug("Sleeping...")
+            time.sleep(self.__poll_interval)
+    
+            
+class XantrexReader():
+    # Commands we use.  They are sent across the serial line, in the format "<command>?\r".
+    commands = {'TIME':'power.time', 'KWHTODAY':'power.today', 'POUT':'power.out', 'PIN':'power.in', 'KWHLIFE':'power.life'}
+    # Other commands we know of:
+    # MEASTEMP: The temperature of the inverter, in the format C:0.0 F:32.0
+    # IDN
+    # ROM
+    # VIN
+    # IIN
+    # VOUT
+    # IOUT
+    # RECTIME
+
+    # how often to poll the Inverter and report the status in seconds.
+    poll_interval = 5
+    
+    # how often to poll the Inverter if it appears to be offline.
+    poll_interval_offline = 60
+    
+    # The serial connection we are using.
+    serial_port = '/dev/ttyS0'
+    
+    # The serial baud rate.
+    serial_baud = 9600
+
+    def __init__(self):
+        self.__logger = logging.getLogger("xantrexWatcher.XantrexReader")
+        self.__logger.info("Initialised...")
+        self.__listeners = []
+    
+    def add_listener(self, listener):
+        self.__listeners.append(listener)
+
+    def read(self):
+        while True:
+            conn = None
+            data = {}
+            
+            try:
+                # Open the serial port
+                self.__logger.info("Opening the serial connection on port %s" % self.serial_port)
+                conn = serial.Serial(self.serial_port, self.serial_baud, timeout=1)
+
+                # Iterate through each of the commands
+                for command, key in self.commands.items():
+                    self.__logger.debug("Writing command %s" % command)
+                    conn.write("%s?\r" % command)
+                    self.__logger.debug("Finished writing, now reading")
+                    value = float(conn.read(255))
+                    self.__logger.debug('%s: %s' % (key, str(value)))
+                    
+                    # Record the retrieved data
+                    data[key] = value
+            except Exception, e:
+                self.__logger.exception(e)
+            
+            finally:
+                # Close the serial connection until next time.
+                self.__logger.info("Closing the serial connection")
+                if conn:
+                    conn.close()
+                
+            if len(data) > 0:
+                # Report the values to our listeners
+                for listener in self.__listeners:
+                    try:
+                        listener.handleXantrexData(data)
+                    except:
+                        self.__logger.exception("Unable to send data %s to the listener %s" % (data, listener))
+              
+            # Sleep until next time.
+            self.__logger.info("Sleeping")
+            sleep_time = self.poll_interval
+            if "power.out" in data and data["power.out"] <= 0:
+                sleep_time = self.poll_interval_offline
+            time.sleep(sleep_time)
+            self.__logger.debug("Woke from sleep")
+
+
+def __setup_logger():
+    # Setup the logger
+    logger = logging.getLogger('xantrexWatcher')
+    logger.setLevel(logging.DEBUG)
+    
+    logfile = "xantrexWatcher.log"
+    # Determine the logger location
+    if not os.path.exists(os.path.join(os.getcwd(), 'setup.py')):
+        # We are in production.
+        logfile = os.path.join("var", "log", logfile)
+    
+    # Add the log message handler to the logger
+    file_handler = logging.handlers.RotatingFileHandler(
+                   logfile, maxBytes=10485760, backupCount=7)
+    file_handler.setLevel(logging.DEBUG)
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+
+if __name__ == '__main__':
+    logger = __setup_logger()
+    
+    httpHandler = HTTPHandlerFactory()
+    webserver = ThreadedHTTPServer(httpHandler)
+    webserver.start()
+    
+    machinePoller = MachineStatePoller()
+    machinePoller.add_listener(httpHandler)
+    machinePoller.start()
+    
+    zabbixSender = ZabbixSender()
+    pvOutputSender = PVOutputSender()
+    
+    reader = XantrexReader()
+    reader.add_listener(zabbixSender)
+    reader.add_listener(pvOutputSender)
+    reader.add_listener(httpHandler)
+    reader.read()
