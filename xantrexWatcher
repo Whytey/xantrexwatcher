@@ -96,10 +96,12 @@ class PVOutputSender():
         self.__last_status = None
         
     def __add_output(self, time, output):
+        # End of day has now been uploaded
         self.__uploaded_end_of_day = True
     
     def __add_status(self, time, energy):
-        # If we are uploading status, we can't have uploaded end of day data yet
+        # If we are uploading status, we can't have really uploaded end of day 
+        # data just yet
         self.__uploaded_end_of_day = False
         
         # Record the last time we uploaded status
@@ -116,7 +118,7 @@ class PVOutputSender():
 
         # Get the time of this update
         assert "time" in data, "Message does not specify update time" % data
-        updateTime = data["time"]
+        updateTime = float(data["time"])
         
 
         assert "power.out" in inverterData, "power.out is not specified in the inverterData: %s" % inverterData
@@ -128,12 +130,13 @@ class PVOutputSender():
             # Inverter is offline but we haven't uploaded for end of day yet
             self.__logger.info("Uploading end of day stats: %s" % powerToday)
             self.__add_output(updateTime, powerToday)
-        else: 
+            
+        if powerOut > 0: 
             # Inverter is online.  If we have never provided status or we 
             # have waited the interval since providing status 
             if not self.__last_status or (self.__last_status 
-                                          and (datetime.fromtimestamp(self.__last_status) - datetime.fromtimestamp(updateTime)).seconds > self.__status_interval * 60):
-                self.__logger.info("Uploading end of day stats: %s" % powerToday)
+                                          and (datetime.fromtimestamp(updateTime) - datetime.fromtimestamp(self.__last_status)).seconds > self.__status_interval * 60):
+                self.__logger.info("Uploading status: %s" % powerOut)
                 self.__add_status(updateTime, powerOut)
                  
 
@@ -230,9 +233,6 @@ class XantrexReader():
     # how often to poll the Inverter and report the status in seconds.
     poll_interval = 5
     
-    # how often to poll the Inverter if it appears to be offline.
-    poll_interval_offline = 60
-    
     # The serial connection we are using.
     serial_port = '/dev/ttyS0'
     
@@ -290,10 +290,7 @@ class XantrexReader():
               
             # Sleep until next time.
             self.__logger.info("Sleeping")
-            sleep_time = self.poll_interval
-            if "power.out" in data and data["power.out"] <= 0:
-                sleep_time = self.poll_interval_offline
-            time.sleep(sleep_time)
+            time.sleep(self.poll_interval)
             self.__logger.debug("Woke from sleep")
 
 
