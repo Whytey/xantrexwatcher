@@ -5,7 +5,7 @@
 # There is very little error checking in this script!
 
 from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
-from datetime import timedelta
+from datetime import timedelta, datetime
 import logging
 import logging.handlers
 import os
@@ -60,18 +60,18 @@ class HTTPHandler(BaseHTTPRequestHandler):
 
     
 class ThreadedHTTPServer(threading.Thread):
-    # Which address we should bind to.
-    __server_address = '127.0.0.1'
+    # Which address we should bind to. Empty string ("") binds to all interfaces
+    __web_server_address = ''
     
     # Which port the server should bind to.
-    __server_port = 8080
+    __web_server_port = 8080
     
     def __init__(self, handler):
         threading.Thread.__init__(self)
         self.__logger = logging.getLogger("xantrexWatcher.ThreadedHTTPServer")
         self.__logger.info("Initialised...")
         self.__handler = handler
-        self.__server = HTTPServer((self.__server_address, self.__server_port), self.__handler)
+        self.__server = HTTPServer((self.__web_server_address, self.__web_server_port), self.__handler)
 
     
     def run(self):
@@ -80,14 +80,62 @@ class ThreadedHTTPServer(threading.Thread):
 
 
 class PVOutputSender():
+    # Your *private* key for uploading the PVOUtput.org
+    __api_key = ""
+    
+    # The id of the system you are uploading for.
+    __system_id = ""
+    
+    # The number of minutes between calling the AddStatus service.
+    __status_interval = 10
     
     def __init__(self):
         self.__logger = logging.getLogger("xantrexWatcher.PVOutputSender")
         self.__logger.info("Initialised...")
+        self.__uploaded_end_of_day = False
+        self.__last_status = None
+        
+    def __add_output(self, time, output):
+        self.__uploaded_end_of_day = True
+    
+    def __add_status(self, time, energy):
+        # If we are uploading status, we can't have uploaded end of day data yet
+        self.__uploaded_end_of_day = False
+        
+        # Record the last time we uploaded status
+        self.__last_status = time
+        
     
     def handleXantrexData(self, data):
-        pass
+        assert type(data) == dict, "data should be a dictionary: %s" % data
+        assert "inverterData" in data, "Message does not provide inverterData" % data
 
+        # Get the inverter data
+        inverterData = data["inverterData"]
+        assert type(inverterData) == dict, "inverterData should be a dictionary: %s" % inverterData
+
+        # Get the time of this update
+        assert "time" in data, "Message does not specify update time" % data
+        updateTime = data["time"]
+        
+
+        assert "power.out" in inverterData, "power.out is not specified in the inverterData: %s" % inverterData
+        assert "power.today" in inverterData, "power.today is not specified in the inverterData: %s" % inverterData
+        powerOut = inverterData["power.out"]
+        powerToday = inverterData["power.today"]
+        
+        if powerOut == 0 and not self.__uploaded_end_of_day:
+            # Inverter is offline but we haven't uploaded for end of day yet
+            self.__logger.info("Uploading end of day stats: %s" % powerToday)
+            self.__add_output(updateTime, powerToday)
+        else: 
+            # Inverter is online.  If we have never provided status or we 
+            # have waited the interval since providing status 
+            if not self.__last_status or (self.__last_status 
+                                          and (datetime.fromtimestamp(self.__last_status) - datetime.fromtimestamp(updateTime)).seconds > self.__status_interval * 60):
+                self.__logger.info("Uploading end of day stats: %s" % powerToday)
+                self.__add_status(updateTime, powerOut)
+                 
 
 class ZabbixSender():
     # The host running the zabbix-server.
@@ -101,7 +149,10 @@ class ZabbixSender():
         self.__logger.info("Initialised...")
 
     def handleXantrexData(self, data):
-        for key, value in data.items():
+        assert type(data) == dict, "data should be a dictionary: %s" % data
+        assert "inverterData" in data, "Message does not provide inverterData" % data
+        assert type(data["inverterData"]) == dict, "inverterData should be a dictionary: %s" % data
+        for key, value in data["inverterData"].items():
             # Report status back.
             self.__logger.debug("Calling zabbix_sender with value of %s for key %s" % (str(value), key))
             subprocess.call(['zabbix_sender', '-z', self.zabbix_server, '-s', self.zabbix_host, '-k', key, '-o', str(value)])
@@ -200,11 +251,13 @@ class XantrexReader():
         while True:
             conn = None
             data = {}
+            data["time"] = str(time.time())
             
             try:
                 # Open the serial port
                 self.__logger.info("Opening the serial connection on port %s" % self.serial_port)
                 conn = serial.Serial(self.serial_port, self.serial_baud, timeout=1)
+                inverterData = {}
 
                 # Iterate through each of the commands
                 for command, key in self.commands.items():
@@ -215,7 +268,9 @@ class XantrexReader():
                     self.__logger.debug('%s: %s' % (key, str(value)))
                     
                     # Record the retrieved data
-                    data[key] = value
+                    inverterData[key] = value
+                    
+                data["inverterData"] = inverterData
             except Exception, e:
                 self.__logger.exception(e)
             
@@ -274,17 +329,23 @@ def __setup_logger():
 if __name__ == '__main__':
     logger = __setup_logger()
     
+    # Create a web server and kick it off.
     httpHandler = HTTPHandlerFactory()
     webserver = ThreadedHTTPServer(httpHandler)
     webserver.start()
     
+    # Create a machine state poller and kick it off.  The httpHandler is 
+    # interested in machine state data.
     machinePoller = MachineStatePoller()
     machinePoller.add_listener(httpHandler)
     machinePoller.start()
     
+    # Create the other listeners.
     zabbixSender = ZabbixSender()
     pvOutputSender = PVOutputSender()
     
+    # Create the reader of the inverter data.  Register the objects that are
+    # interested in the inverter data.  
     reader = XantrexReader()
     reader.add_listener(zabbixSender)
     reader.add_listener(pvOutputSender)
