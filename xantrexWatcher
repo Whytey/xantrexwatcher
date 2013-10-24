@@ -98,6 +98,7 @@ class PVOutputSender():
     def __add_output(self, time, output):
         # End of day has now been uploaded
         self.__uploaded_end_of_day = True
+       
     
     def __add_status(self, time, energy):
         # If we are uploading status, we can't have really uploaded end of day 
@@ -122,22 +123,34 @@ class PVOutputSender():
         
 
         assert "power.out" in inverterData, "power.out is not specified in the inverterData: %s" % inverterData
+        assert "power.in" in inverterData, "power.in is not specified in the inverterData: %s" % inverterData
         assert "power.today" in inverterData, "power.today is not specified in the inverterData: %s" % inverterData
         powerOut = inverterData["power.out"]
+        powerIn = inverterData["power.in"]
         powerToday = inverterData["power.today"]
         
-        if powerOut == 0 and not self.__uploaded_end_of_day:
-            # Inverter is offline but we haven't uploaded for end of day yet
-            self.__logger.info("Uploading end of day stats: %s" % powerToday)
-            self.__add_output(updateTime, powerToday)
-            
-        if powerOut > 0: 
-            # Inverter is online.  If we have never provided status or we 
-            # have waited the interval since providing status 
-            if not self.__last_status or (self.__last_status 
-                                          and (datetime.fromtimestamp(updateTime) - datetime.fromtimestamp(self.__last_status)).seconds > self.__status_interval * 60):
+        self.__logger.debug("Power In: %s, Power Out: %s, Power Today: %s" % (powerIn, powerOut, powerToday))
+        
+        minutesSinceUpdate = (datetime.fromtimestamp(updateTime) - datetime.fromtimestamp(self.__last_status)).seconds / 60.0
+        self.__logger.debug("Time since last upload: %s" % str(minutesSinceUpdate))
+        
+        # At most, upload the PVOutput at Status Interval minutes.  This also means
+        # we wait at least 10 minutes after the last status before uploading end of day,
+        # which eliminates any start of day/end of day flutter due to low power out.
+        if not self.__last_status or (self.__last_status 
+                                      and minutesSinceUpdate > self.__status_interval * 60):
+        
+            if powerOut > 0: 
+                # Inverter is online.  If we have never provided status or we 
+                # have waited the interval since providing status 
                 self.__logger.info("Uploading status: %s" % powerOut)
                 self.__add_status(updateTime, powerOut)
+
+            if powerOut == 0 and powerIn == 0 and not self.__uploaded_end_of_day:
+                # Inverter is offline but we haven't uploaded for end of day yet
+                self.__logger.info("Uploading end of day stats: %s" % powerToday)
+                self.__add_output(updateTime, powerToday)
+                
                  
 
 class ZabbixSender():
