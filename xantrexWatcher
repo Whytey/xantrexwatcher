@@ -2,6 +2,8 @@
 # Monitor the status of the solar inverter and
 # send it to zabbix.
 #
+# Now uploads to PVOutput.org too.
+#
 # There is very little error checking in this script!
 
 from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
@@ -13,6 +15,8 @@ import serial
 import subprocess
 import threading
 import time
+import urllib
+import urllib2
 
 
 class HTTPHandlerFactory():
@@ -89,18 +93,54 @@ class PVOutputSender():
     # The number of minutes between calling the AddStatus service.
     __status_interval = 10
     
+    # The end of day URL
+    __end_of_day_url = "http://pvoutput.org/service/r2/addoutput.jsp"
+
+    # The live data URL
+    __live_status_url = "http://pvoutput.org/service/r2/addstatus.jsp"
+    
     def __init__(self):
         self.__logger = logging.getLogger("xantrexWatcher.PVOutputSender")
         self.__logger.info("Initialised...")
         self.__uploaded_end_of_day = False
         self.__last_status = None
         
-    def __add_output(self, time, output):
+    def __upload(self, url, data):
+        self.__logger.debug("Data to upload: %s" % data)
+
+        post_data=urllib.urlencode(data)
+        req=urllib2.Request(url, post_data)
+        
+        req.add_header("Content-type", "application/x-www-form-urlencoded")
+        req.add_header("X-Pvoutput-Apikey", self.__api_key)
+        req.add_header("X-Pvoutput-SystemId", self.__system_id)
+
+        response = urllib2.urlopen(req)
+
+        if response:
+            self.__logger.debug("Response code of %s with the following info: %s" % (response.getcode(), response.info()))   
+              
+    def __add_output(self, time, daysEnergyKWH):
+
+        days_data=[('d', time.strftime("%Y%m%d")),
+                   ('g', daysEnergyKWH * 1000)]
+        
+        # Upload the data
+        self.__upload(self.__end_of_day_url, days_data)
+
         # End of day has now been uploaded
         self.__uploaded_end_of_day = True
-       
-    
-    def __add_status(self, time, energy):
+
+    def __add_status(self, time, powerOutW, daysEnergyKWH):
+        
+        live_data = [('d', time.strftime("%Y%m%d")),
+                     ('t', time.strftime("%H:%M")),
+                     ('v1', daysEnergyKWH * 1000),
+                     ('v2', powerOutW)]
+
+        # Upload the data
+        self.__upload(self.__live_status_url, live_data)
+
         # If we are uploading status, we can't have really uploaded end of day 
         # data just yet
         self.__uploaded_end_of_day = False
@@ -119,7 +159,7 @@ class PVOutputSender():
 
         # Get the time of this update
         assert "time" in data, "Message does not specify update time" % data
-        updateTime = float(data["time"])
+        updateTime = datetime.fromtimestamp(float(data["time"]))
         
 
         assert "power.out" in inverterData, "power.out is not specified in the inverterData: %s" % inverterData
@@ -131,14 +171,11 @@ class PVOutputSender():
         
         self.__logger.debug("Power In: %s, Power Out: %s, Power Today: %s" % (powerIn, powerOut, powerToday))
         
-        minutesSinceUpdate = (datetime.fromtimestamp(updateTime) - datetime.fromtimestamp(self.__last_status)).seconds / 60.0
-        self.__logger.debug("Time since last upload: %s" % str(minutesSinceUpdate))
-        
         # At most, upload the PVOutput at Status Interval minutes.  This also means
         # we wait at least 10 minutes after the last status before uploading end of day,
         # which eliminates any start of day/end of day flutter due to low power out.
         if not self.__last_status or (self.__last_status 
-                                      and minutesSinceUpdate > self.__status_interval * 60):
+                                      and (updateTime - datetime.fromtimestamp(self.__last_status)).seconds > self.__status_interval * 60):
         
             if powerOut > 0: 
                 # Inverter is online.  If we have never provided status or we 
@@ -151,7 +188,6 @@ class PVOutputSender():
                 self.__logger.info("Uploading end of day stats: %s" % powerToday)
                 self.__add_output(updateTime, powerToday)
                 
-                 
 
 class ZabbixSender():
     # The host running the zabbix-server.
