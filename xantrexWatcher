@@ -93,16 +93,12 @@ class PVOutputSender():
     # The number of minutes between calling the AddStatus service.
     __status_interval = 10
     
-    # The end of day URL
-    __end_of_day_url = "http://pvoutput.org/service/r2/addoutput.jsp"
-
     # The live data URL
     __live_status_url = "http://pvoutput.org/service/r2/addstatus.jsp"
     
     def __init__(self):
         self.__logger = logging.getLogger("xantrexWatcher.PVOutputSender")
         self.__logger.info("Initialised...")
-        self.__uploaded_end_of_day = False
         self.__last_status = None
         
     def __upload(self, url, data):
@@ -120,17 +116,6 @@ class PVOutputSender():
         if response:
             self.__logger.debug("Response code of %s with the following info: %s" % (response.getcode(), response.info()))   
               
-    def __add_output(self, time, daysEnergyKWH):
-
-        days_data=[('d', time.strftime("%Y%m%d")),
-                   ('g', daysEnergyKWH * 1000)]
-        
-        # Upload the data
-        self.__upload(self.__end_of_day_url, days_data)
-
-        # End of day has now been uploaded
-        self.__uploaded_end_of_day = True
-
     def __add_status(self, time, powerOutW, daysEnergyKWH):
         
         live_data = [('d', time.strftime("%Y%m%d")),
@@ -141,10 +126,6 @@ class PVOutputSender():
         # Upload the data
         self.__upload(self.__live_status_url, live_data)
 
-        # If we are uploading status, we can't have really uploaded end of day 
-        # data just yet
-        self.__uploaded_end_of_day = False
-        
         # Record the last time we uploaded status
         self.__last_status = time
         
@@ -174,20 +155,13 @@ class PVOutputSender():
         # At most, upload the PVOutput at Status Interval minutes.  This also means
         # we wait at least 10 minutes after the last status before uploading end of day,
         # which eliminates any start of day/end of day flutter due to low power out.
-        if not self.__last_status or (self.__last_status 
-                                      and (updateTime - datetime.fromtimestamp(self.__last_status)).seconds > self.__status_interval * 60):
+        if not self.__last_status or (updateTime - self.__last_status).seconds > self.__status_interval * 60:
         
-            if powerOut > 0: 
+            if powerOut > 0 and powerIn > 0: 
                 # Inverter is online.  If we have never provided status or we 
                 # have waited the interval since providing status 
                 self.__logger.info("Uploading status: %s" % powerOut)
-                self.__add_status(updateTime, powerOut)
-
-            if powerOut == 0 and powerIn == 0 and not self.__uploaded_end_of_day:
-                # Inverter is offline but we haven't uploaded for end of day yet
-                self.__logger.info("Uploading end of day stats: %s" % powerToday)
-                self.__add_output(updateTime, powerToday)
-                
+                self.__add_status(updateTime, powerOut, powerToday)
 
 class ZabbixSender():
     # The host running the zabbix-server.
