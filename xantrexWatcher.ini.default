@@ -1,0 +1,72 @@
+# Provides default configurations for the xantrexWatcher.  This file
+# should not be modified.  Instead, a xantrexWatcher.ini file should be 
+# specified in one of the following locations:
+#  - the current working directory of xantrexWatcher
+#  - in ~/.xantrexWatcher/
+#  - in /etc/xantrexWatcher/
+#
+
+[WebServer]
+# Whether the WebServer is enabled.  If so, the configuration must be valid.
+enabled=true
+
+# The address that the web server should bind to.  Blank indicates that all
+# available addresses should be used.
+address=127.0.0.1
+
+# What port the web server should listen on.
+port=8080
+
+
+[PVOutput]
+# Whether uploading to PVOutput.org is enabled.  If so, the configuration must be valid.
+enabled=true
+
+# The PVOutput.org API key.  Must be specified in an ini file.
+#apiKey=
+
+# The system ID that we are providing data for.  Must be specified in an ini file.
+#systemId=
+
+# How often we should upload data to PVOutput.org, in minutes.
+statusInterval=10
+
+# The URL that we send live updates to.
+liveStatusUrl="http://pvoutput.org/service/r2/addstatus.jsp"
+
+[Zabbix]
+# Whether Zabbix updates are enabled.  If so, the configuration must be valid.
+enabled=true
+
+# The address of the Zabbix server.
+server=192.168.0.100
+
+# The host that is being updated.  Is expected to have the following items:
+# power.in		The power into the inverter. (W)
+# power.out		The power output from the inverter (W)
+# power.today	The power generated today (KWh)
+# power.life	The power generated through the life of the inverter (KWh)
+# power.time	The time online today (Hours)
+host=inverter1
+
+[StatusPoller]
+# How often to poll the machine for status, in seconds.
+interval=30
+
+[Reader]
+# The serial port that the inverter is connected to.
+port=/dev/ttyS0
+
+# The baud rate of the port.
+baud=9600
+
+# How often the port is queried for updates.
+interval=5
+
+[Logger]
+# What level do we log at?  Options:
+# DEBUG
+# INFO
+# WARNING
+# ERROR
+level=INFO

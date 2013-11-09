@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+# Get all solar history from a zabbix database for uploading to 
+# PVOutput.org as a batch CSV upload.
+#
+# There is very little error checking in this script!
 '''
 Created on 29/10/2013
 
