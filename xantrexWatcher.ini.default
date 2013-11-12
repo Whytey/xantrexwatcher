@@ -32,7 +32,7 @@ enabled=true
 statusInterval=10
 
 # The URL that we send live updates to.
-liveStatusUrl="http://pvoutput.org/service/r2/addstatus.jsp"
+liveStatusUrl=http://pvoutput.org/service/r2/addstatus.jsp
 
 [Zabbix]
 # Whether Zabbix updates are enabled.  If so, the configuration must be valid.
